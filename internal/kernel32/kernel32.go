@@ -38,7 +38,6 @@ var (
 	kernel32                     = syscall.MustLoadDLL("kernel32.dll")
 	procCloseHandle              = kernel32.MustFindProc("CloseHandle")
 	procCreateToolhelp32Snapshot = kernel32.MustFindProc("CreateToolhelp32Snapshot")
-	procGetLastError             = kernel32.MustFindProc("GetLastError")
 	procGetModuleHandle          = kernel32.MustFindProc("GetModuleHandleW")
 	procProcess32First           = kernel32.MustFindProc("Process32First")
 	procProcess32Next            = kernel32.MustFindProc("Process32Next")
@@ -47,8 +46,6 @@ var (
 	procOpenProcess              = kernel32.MustFindProc("OpenProcess")
 	procReadProcessMemory        = kernel32.MustFindProc("ReadProcessMemory")
 	procWriteProcessMemory       = kernel32.MustFindProc("WriteProcessMemory")
-	psapi                        = syscall.MustLoadDLL("psapi.dll") //kern32 didnt work
-	procEnumProcessModules       = psapi.MustFindProc("EnumProcessModules")
 )
 
 // https://msdn.microsoft.com/9e2f7345-52bf-4bfc-9761-90b0b374c727
@@ -103,6 +100,7 @@ func WriteProcessMemory(hProcess uintptr, lpBaseAddress uintptr, lpBuffer uintpt
 		uintptr(lpBaseAddress),
 		uintptr(lpBuffer),
 		uintptr(nSize),
+		0,
 	)
 
 	if err.Error() != "The operation completed successfully." {
@@ -132,6 +130,30 @@ func OpenProcess(dwDesiredAccess uint32, bInheritHandle bool, dwProcessId uint32
 	return uintptr(ret), nil
 }
 
+// GetModuleHandle returns a module handle for the current process.
+func GetModuleHandle(module string) (uintptr, error) {
+	var namePtr uintptr
+
+	if module != "" {
+		name, err := syscall.UTF16PtrFromString(module)
+		if err != nil {
+			return 0, err
+		}
+
+		namePtr = uintptr(unsafe.Pointer(name))
+	}
+
+	ret, _, err := procGetModuleHandle.Call(namePtr)
+	if ret == 0 {
+		if err.Error() != "The operation completed successfully." {
+			return 0, err
+		}
+		return 0, errors.New("module not found")
+	}
+
+	return uintptr(ret), nil
+}
+
 func GetModule(module string, PID uint32) (uintptr, error) {
 	var (
 		me32     ModuleEntry32
@@ -140,6 +162,11 @@ func GetModule(module string, PID uint32) (uintptr, error) {
 	)
 
 	snap = createToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32, PID)
+	if snap == 0 {
+		return 0, errors.New("snapshot failed")
+	}
+	defer closeHandle(snap)
+
 	me32.DwSize = uint32(unsafe.Sizeof(me32))
 
 	for ok := module32First(snap, &me32); ok; ok = module32Next(snap, &me32) {
@@ -150,7 +177,43 @@ func GetModule(module string, PID uint32) (uintptr, error) {
 		}
 	}
 
-	return (uintptr)(unsafe.Pointer(me32.ModBaseAddr)), errors.New("module not found")
+	return 0, errors.New("module not found")
+}
+
+type LoadedModule struct {
+	Name        string
+	Path        string
+	BaseAddress uintptr
+	Size        uint32
+	Handle      uintptr
+}
+
+func GetModules(PID uint32) ([]LoadedModule, error) {
+	var (
+		me32 ModuleEntry32
+		snap uintptr
+		mods []LoadedModule
+	)
+
+	snap = createToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32, PID)
+	if snap == 0 {
+		return nil, errors.New("snapshot failed")
+	}
+	defer closeHandle(snap)
+
+	me32.DwSize = uint32(unsafe.Sizeof(me32))
+
+	for ok := module32First(snap, &me32); ok; ok = module32Next(snap, &me32) {
+		mods = append(mods, LoadedModule{
+			Name:        parseint8(me32.SzModule[:]),
+			Path:        parseint8(me32.SzExePath[:]),
+			BaseAddress: uintptr(unsafe.Pointer(me32.ModBaseAddr)),
+			Size:        me32.ModBaseSize,
+			Handle:      me32.HModule,
+		})
+	}
+
+	return mods, nil
 }
 
 func GetProcessID(process string) (uint32, error) {
@@ -161,6 +224,11 @@ func GetProcessID(process string) (uint32, error) {
 	)
 
 	handle = createToolhelp32Snapshot(TH32CS_SNAPALL, 0)
+	if handle == 0 {
+		return 0, errors.New("snapshot failed")
+	}
+	defer closeHandle(handle)
+
 	pe32.DwSize = uint32(unsafe.Sizeof(pe32))
 
 	for ok := process32First(handle, &pe32); ok; ok = process32Next(handle, &pe32) {
@@ -233,8 +301,15 @@ func closeHandle(hObject uintptr) bool {
 	return ret != 0
 }
 
+func CloseHandle(hObject uintptr) bool {
+	return closeHandle(hObject)
+}
+
 func parseint8(arr []uint8) string {
 	n := bytes.Index(arr, []uint8{0})
+	if n == -1 {
+		n = len(arr)
+	}
 
 	return string(arr[:n])
 }

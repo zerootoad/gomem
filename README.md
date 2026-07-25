@@ -1,20 +1,36 @@
 # GoMem
 
-![Continuous Integration](https://github.com/jamesmoriarty/gomem/workflows/Continuous%20Integration/badge.svg?branch=master) ![Latest Tag](https://img.shields.io/github/v/tag/jamesmoriarty/gomem.svg?logo=github&label=latest) [![Go Report Card](https://goreportcard.com/badge/github.com/jamesmoriarty/gomem)](https://goreportcard.com/report/github.com/jamesmoriarty/gomem)
+Fork of [github.com/jamesmoriarty/gomem](https://github.com/jamesmoriarty/gomem).
+
+![Continuous Integration](https://github.com/jamesmoriarty/gomem/workflows/Continuous%20Integration/badge.svg?branch=master) ![Latest Tag](https://img.shields.io/github/v/tag/jamesmoriarty/gomem.svg?logo=github&label=latest) [![Go Report Card](https://goreportcard.com/badge/github.com/zerootoad/gomem)](https://goreportcard.com/report/github.com/zerootoad/gomem)
 
 A Go package for manipulating Windows processes. Automated tests manipulate and verify their own process memory via Windows APIs.
 
 ```go
-import "github.com/jamesmoriarty/gomem"
+import "github.com/zerootoad/gomem"
 
-// Open process with handle.
-process, err  := gomem.GetOpenProcessFromName("example.exe")
+process, err := gomem.GetOpenProcessFromName("example.exe")
+if err != nil {
+	panic(err)
+}
+defer process.Close()
 
-// Read from process memory.
-valuePtr, err := process.ReadUInt32(offsetPtr)
+base, err := process.GetModule("example.exe")
+if err != nil {
+	panic(err)
+}
 
-// Write to process memory.
-process.WriteByte(valuePtr, value)
+ptr, err := process.ResolvePointer(base+0x01234567, 0x10, 0x20, 0x8)
+if err != nil {
+	panic(err)
+}
+
+value, err := process.ReadUInt32(Ptr)
+if err != nil {
+	panic(err)
+}
+
+_ = process.WriteUInt32(ptr, value+25)
 ```
 
 ## Build
@@ -31,7 +47,7 @@ go test
 
 ## Docs
 
-[pkg.go.dev/github.com/jamesmoriarty/gomem](https://pkg.go.dev/github.com/jamesmoriarty/gomem)
+[pkg.go.dev/github.com/zerootoad/gomem](https://pkg.go.dev/github.com/zerootoad/gomem)
 
 ## Examples
 
